@@ -23,7 +23,9 @@ unsigned int secH=0,secL=0;
 void setup() 
 {
   Serial.begin(115200);
-  delay(1000);
+  pinMode(programPin,OUTPUT);
+  pinMode(readPin,OUTPUT);
+  
 }
 
 void setupMode(byte mode)
@@ -58,33 +60,27 @@ void setupMode(byte mode)
   {
     pinMode(*(adrPins + i),OUTPUT);
   }
+  pinMode(enablePin,OUTPUT);
 }
 int index=0;
 void loop() 
 {
-  if(Serial.available()){
+  if(Serial.available()>36)
+  {
+    setupMode(Serial.read());
     inByte=Serial.read();
-    if(inByte==0x55)
+    switch(inByte)
     {
-      while(Serial.available()==0);
-      setupMode(Serial.read());
-      while(Serial.available()==0);
-      inByte=Serial.read();
-      switch(inByte)
-      {
-        case 'w':
-          programMode();
-          while(Serial.available()==0);
-          secH=Serial.read();
-          while(Serial.available()==0);
-          secL=Serial.read();
-          writeSector(secH,secL);
-          break;
-        case 'r':
-          readMode();
-          readROM();
-          break;
-      }
+      case 'w':
+        programMode();
+        secH=Serial.read();
+        secL=Serial.read();
+        writeSector(secH,secL);
+        break;
+      case 'r':
+        readMode();
+        readROM();
+        break;
     }
   }
 }
@@ -150,27 +146,24 @@ void programByte(short Data)
 
 void writeSector(unsigned char sectorH,unsigned char sectorL)
 {
-  byte dataBuffer[256];
+  byte dataBuffer[32];
   unsigned long address=0;
   byte CHK=sectorH,CHKreceived;
   CHK^=sectorL;
 
   address=sectorH;
   address=(address<<8)|sectorL;
-  address*=256;
-
-  for(int i=0;i<256;i++)
+  address*=32;
+  for(int i=0;i<32;i++)
   {
-        while(Serial.available()==0);
         dataBuffer[i]=Serial.read();
         CHK ^= dataBuffer[i];
   }
-  while(Serial.available()==0);
   CHKreceived = Serial.read();
   programMode();
   //only program the bytes if the checksum is equal to the one received
   if(CHKreceived==CHK){
-    for (int i = 0; i < 256; ++i)
+    for (int i = 0; i < 32; ++i)
     {
       setAddress(address++);
       if(wordSize == 1) programByte(dataBuffer[i]);

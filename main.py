@@ -1,5 +1,5 @@
 import sys 
-import serial,time
+import serial as serial,time
 import struct      
 from PyQt5 import uic
 from PyQt5.QtCore import QFile, QIODevice
@@ -18,42 +18,26 @@ class Programmer():
         global Rom        
         wRom = Rom
         progress.setValue(0)
-        ser = serial.Serial(self.port, 115200, timeout=0)
-        ser.write(b"\x55")
-        time.sleep(0.01)
-        ser.write(bytes(self.type,"ASCII"))
-        time.sleep(0.01)
-
+        ser = serial.Serial(self.port, 115200, timeout=None)
+        
         romsize = len( wRom )
-        numsectors=int( romsize / 256 )
+        numsectors=int( romsize / 32 )
         progress.setMaximum(numsectors)
         for i in range(numsectors):
-            time.sleep(0.01)
-            ser.write(bytes("\x77","ASCII"))
-            time.sleep(0.01)
+            ser.write(bytes(self.type,"ASCII"))
+            ser.write(bytes("w","ASCII"))
             ser.write(struct.pack(">B",i>>8))
             CHK=i>>8
-            time.sleep(0.01)
             ser.write(struct.pack(">B",i&0xFF))
             CHK^=i&0xFF
-            time.sleep(0.01)
-            data = wRom[i*256:(i+1)*256]
-            for j in range(256):
+            data = wRom[i*32:(i+1)*32]
+            for j in range(32):
                 CHK=CHK^data[j]
-            time.sleep(0.01)
             response=~CHK
             while response!=CHK:
                 ser.write(data)
                 ser.write(struct.pack(">B",CHK&0xFF))     
-                timeout=2000
-                while ser.inWaiting()==0:
-                    time.sleep(0.01)
-                    timeout=timeout-1
-                    if timeout==0:
-                        print("could not get a response, please start again\n")
-                        break
                 response=ord(ser.read(1))
-                print(response,ser.read(1))
                 if response!=CHK:
                     print("wrong checksum, sending chunk again\n")
             progress.setValue(i + 1)
@@ -135,7 +119,7 @@ class Aplication():
         memoryType = mWid.cBMemory.currentIndex() 
         if(memoryType != -1):          
             programmer = Programmer(mWid.aPorts.currentText(), memoryType)
-            Rom = RomConverter().convertRom(mWid.cBMemory.currentText())
+            #Rom = RomConverter().convertRom(mWid.cBMemory.currentText())
             programmer.write(mWid.progressBar)
         
     def dump(self):
