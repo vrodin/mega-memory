@@ -1,36 +1,68 @@
 import sys 
-from pymodbus.client.sync import ModbusSerialClient as ModbusClient
+import serial,time
+import struct      
 from PyQt5 import uic
 from PyQt5.QtCore import QFile, QIODevice
 from PyQt5.QtSerialPort import QSerialPort, QSerialPortInfo 
 from PyQt5.QtWidgets import QApplication, QFileDialog
 
+Rom = None
+
 class Programmer():
 
     def __init__(self, portName, memoryType):
         self.port = portName
-        self.type = memoryType
+        self.type = str(memoryType)
 
-    def write(self, wRom ):
-        UNIT = 0x01
-        client = ModbusClient(method='ascii', port=self.port, timeout=1, baudrate=250000)
-        client.connect()
-        rq = await client.write_coil(0, True, unit=UNIT)
-        rr = await client.read_coils(0, 1, unit=UNIT)
-        assert(rq.function_code < 0x80)     # test that we are not an error
-        assert(rr.bits[0] == True)          # test the expected value
+    def write(self, progress ):
+        global Rom        
+        wRom = Rom
+        progress.setValue(0)
+        ser = serial.Serial(self.port, 115200, timeout=0)
+        ser.write(b"\x55")
+        time.sleep(0.01)
+        ser.write(bytes(self.type,"ASCII"))
+        time.sleep(0.01)
+
         romsize = len( wRom )
         numsectors=int( romsize / 256 )
+        progress.setMaximum(numsectors)
         for i in range(numsectors):
-            rq = await client.write_coil(0, wRom[i*256:(i+1)*256-1], unit=UNIT)
-            assert(rq.function_code < 0x80)     
-            rr = await client.read_coils(1, 256, unit=UNIT)
-            assert(rr.bits == wRom[i*256:(i+1)*256-1])
-        client.close()
+            time.sleep(0.01)
+            ser.write(bytes("\x77","ASCII"))
+            time.sleep(0.01)
+            ser.write(struct.pack(">B",i>>8))
+            CHK=i>>8
+            time.sleep(0.01)
+            ser.write(struct.pack(">B",i&0xFF))
+            CHK^=i&0xFF
+            time.sleep(0.01)
+            data = wRom[i*256:(i+1)*256]
+            for j in range(256):
+                CHK=CHK^data[j]
+            time.sleep(0.01)
+            response=~CHK
+            while response!=CHK:
+                ser.write(data)
+                ser.write(struct.pack(">B",CHK&0xFF))     
+                timeout=2000
+                while ser.inWaiting()==0:
+                    time.sleep(0.01)
+                    timeout=timeout-1
+                    if timeout==0:
+                        print("could not get a response, please start again\n")
+                        break
+                response=ord(ser.read(1))
+                print(response,ser.read(1))
+                if response!=CHK:
+                    print("wrong checksum, sending chunk again\n")
+            progress.setValue(i + 1)
+        ser.close()
 
 class RomConverter():
-    def __init__(self,byteArray):
-        self.iRom = byteArray
+    def __init__(self):
+        global Rom
+        self.iRom = Rom
         self.a160bits = [4,5,6,7,12,15,18,17,1,10,16,19,14,13,8,9,11,3,20,2]
         self.q160bits = [0,1,2,6,4,3,5,7]
         self.a801bits = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,18,19,16,17]
@@ -41,19 +73,19 @@ class RomConverter():
             for i in range(8):
                 for j in range(8):
                     if(i & (1<<j)):
-                       nByte = nByte | (1 << (self.q160bits[j] - 1))
+                       nByte = nByte | (1 << (self.q160bits[j]))
             byte = nByte
         return bytes
         
     def convertRom(self,eepromType,invertByte = False):
         wordSize = 1
-        if(eepromType == 'M27C160'):
+        if(eepromType == '27c160'):
             adressMass = self.a160bits
             wordSize = 2
-        elif(eepromType == 'M27C801'):
+        elif(eepromType == '27c801'):
             adressMass = self.a801bits
         else:
-            print 'Memory type is not exist'
+            print('Memory type is not exist')
             return None
         adressCount = 2**(len(adressMass))
         nRom = [0xFF for i in range(adressCount * wordSize)]
@@ -61,18 +93,17 @@ class RomConverter():
             fRomAdress = 0 
             for j in range(len(adressMass)):
                 if(i & (1 << j)):
-                    fRomAdress = fRomAdress | (1<< adressMass[j])
-            if(eepromType == 'M27C160'):
+                    fRomAdress = fRomAdress | (1<< (adressMass[j] - 1))
+            if(eepromType == '27c160'):
                 bytes = self.convertByteM27C160([ self.iRom[fRomAdress*2], self.iRom[fRomAdress*2 + 1] ])
                 nRom[i*2] = bytes[0]
                 nRom[i*2+1] = bytes[1]
-            elif(eepromType == 'M27C801'):
+            elif(eepromType == '27c801'):
                 if(invertByte):
                     nRom[i]=~self.iRom[fRomAdress]
         return nRom    
 
 class Aplication():
-
     def exec_(self):
         self.app.exec_()
     
@@ -86,15 +117,29 @@ class Aplication():
             mW.cBMemory.addItems(['27c801','27c160','27c322'])
 
     def binOpen(self):
+        global Rom
         fBrowser = QFileDialog()
         filePath = fBrowser.getOpenFileName(self.mainWidget, \
             "Open Bin", \
             "", \
             "Bin file *.smc *.sfc *.bin");
-        binFile = QFile(filePath[0])
-        if binFile.open(QIODevice.ReadOnly):
-            return binFile.readData(128)              
-            
+        Rom = []
+        with open(filePath[0], "rb") as binFile:
+            for byte in binFile:
+                Rom+=byte
+            self.mainWidget.burnBtn.setEnabled(True)              
+    
+    def burn(self):
+        global Rom  
+        mWid = self.mainWidget 
+        memoryType = mWid.cBMemory.currentIndex() 
+        if(memoryType != -1):          
+            programmer = Programmer(mWid.aPorts.currentText(), memoryType)
+            Rom = RomConverter().convertRom(mWid.cBMemory.currentText())
+            programmer.write(mWid.progressBar)
+        
+    def dump(self):
+        print("TODO LOL, released on MC :D")
 
     def close(self):
         exit()
@@ -108,10 +153,13 @@ class Aplication():
         mWid.actionExit.triggered.connect(self.close)
         mWid.actionOpen.triggered.connect(self.binOpen)
         mWid.cBConsole.activated.connect(self.usableMemory)
+        mWid.dumpBtn.released.connect(self.dump)
+        mWid.burnBtn.released.connect(self.burn)
+        mWid.burnBtn.setDisabled(True)
+        mWid.dumpBtn.setDisabled(True)
         self.initConsole()
         mWid.show()
-        mWid.scrollArea.hide()   
-
+        
 if __name__ == '__main__':
     Aplication().exec_()
     
