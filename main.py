@@ -18,30 +18,49 @@ class Programmer():
         global Rom        
         wRom = Rom
         progress.setValue(0)
-        ser = serial.Serial(self.port, 115200, timeout=None)
-        
+        ser = serial.Serial(self.port, 115200, timeout=4.0, rtscts=True, xonxoff=False)
+        ser.setDTR(False)
+        time.sleep(1)
         romsize = len( wRom )
-        numsectors=int( romsize / 32 )
+        numsectors=int( romsize / 1024 )
         progress.setMaximum(numsectors)
         for i in range(numsectors):
             ser.write(bytes(self.type,"ASCII"))
             ser.write(bytes("w","ASCII"))
-            ser.write(struct.pack(">B",i>>8))
-            CHK=i>>8
-            ser.write(struct.pack(">B",i&0xFF))
-            CHK^=i&0xFF
-            data = wRom[i*32:(i+1)*32]
-            for j in range(32):
-                CHK=CHK^data[j]
-            response=~CHK
-            while response!=CHK:
-                ser.write(data)
-                ser.write(struct.pack(">B",CHK&0xFF))     
-                response=ord(ser.read(1))
-                if response!=CHK:
-                    print("wrong checksum, sending chunk again\n")
+            address = i*1024
+            data = bytearray(wRom[i*1024:(i+1)*1024])
+            CHK = ((address>>16)&0xFF)^((address>>8)&0xFF)^(address&0xFF)
+            ser.write(bytearray([(address>>16)&0xFF,(address>>8)&0xFF,address&0xFF]))
+            for k in range(int(1024/32)):
+                for j in range(32):
+                    CHK=CHK^data[k*int(1024/32)+j]
+                response=~CHK
+                while response!=CHK:
+                    time.sleep(0.01)
+                    ser.write(data[k*int(1024/32):(k+1)*int(1024/32)])
+                    ser.write(struct.pack(">B",CHK&0xFF))     
+                    response=ord(ser.read(1))
+                    print(response)
+                    if response!=CHK:
+                        print("wrong checksum, sending chunk again\n")
+                CHK = 0
             progress.setValue(i + 1)
+            ser.read(1)
+            time.sleep(0.01)
         ser.close()
+    def read(self, romSize, progress):
+        rRom = bytearray()
+        progress.setValue(0)
+        ser = serial.Serial(self.port, 115200, timeout=None)
+        time.sleep(1)
+        progress.setMaximum(romSize)
+        print (bytes(self.type,"ASCII"))
+        ser.write(bytes(self.type,"ASCII"))
+        ser.write(bytes("r","ASCII")) 
+        data = ser.read(128) 
+        ser.close()
+        return data
+        
 
 class RomConverter():
     def __init__(self):
@@ -52,14 +71,14 @@ class RomConverter():
         self.a801bits = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,18,19,16,17]
 
     def convertByteM27C160(self,bytes):
+        nBytes=[]
         for byte in bytes:
             nByte = 0;
             for i in range(8):
-                for j in range(8):
-                    if(i & (1<<j)):
-                       nByte = nByte | (1 << (self.q160bits[j]))
-            byte = nByte
-        return bytes
+                if(byte & (1<<i)):
+                    nByte = nByte | (1 << (self.q160bits[i]))
+            nBytes.append(nByte)
+        return nBytes
         
     def convertRom(self,eepromType,invertByte = False):
         wordSize = 1
@@ -119,11 +138,20 @@ class Aplication():
         memoryType = mWid.cBMemory.currentIndex() 
         if(memoryType != -1):          
             programmer = Programmer(mWid.aPorts.currentText(), memoryType)
-            #Rom = RomConverter().convertRom(mWid.cBMemory.currentText())
+            Rom = RomConverter().convertRom(mWid.cBMemory.currentText())
+            with open('2.sfc','wb') as fl: 
+                fl.write(bytearray(Rom))
+                fl.close()
             programmer.write(mWid.progressBar)
         
     def dump(self):
-        print("TODO LOL, released on MC :D")
+        mWid = self.mainWidget 
+        memoryType = mWid.cBMemory.currentIndex() 
+        if(memoryType != -1):
+            with open('1.sfc','wb') as fl:         
+                programmer = Programmer(mWid.aPorts.currentText(), memoryType)
+                fl.write(programmer.read(2**20,mWid.progressBar))
+                fl.close()
 
     def close(self):
         exit()
@@ -140,7 +168,7 @@ class Aplication():
         mWid.dumpBtn.released.connect(self.dump)
         mWid.burnBtn.released.connect(self.burn)
         mWid.burnBtn.setDisabled(True)
-        mWid.dumpBtn.setDisabled(True)
+        #mWid.dumpBtn.setDisabled(True)
         self.initConsole()
         mWid.show()
         

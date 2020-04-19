@@ -1,30 +1,33 @@
 
-const int programPin=6;
-const int readPin=7;
-const int eP_801=A6, eP_322=3 ;
-const int BYTEPin = A5 ;//only for 27c166
-int enablePin = 0;
+uint8_t programPin=6,
+        Gpin = 6,
+        Gpin_state = LOW,
+        readPin=7,
+        eP_801=A6, eP_322=3,
+        enablePin = 0,
+        wordSize = 0,
+        memoryType=0,
+        inByte=0,
+        imp = 0,
+        sec_0,sec_1,sec_2;
 
-byte memoryType=0;
-
-unsigned long addrSize = 0, wordSize = 0;
+uint32_t addrSize = 0;
  
-char adrPins_801[20]={ 5,21,22,14,15,16,17,18,A10,A9,A7,A8,19,A11,A12,20,21,A13,A14,24 };
-char adrPins_322[21]={ 2,14,15,16,17,18,19,20,A13,A12,A11,A10,A9,A8,A15,A7,A6,21,24,A14,A5 }; //27c166 use this array without last element A5(BYTE pin)
-char *adrPins;
+uint8_t adrPins_801[20]={ 5,21,22,14,15,16,17,18,A10,A9,A7,A8,19,A11,A12,20,21,A13,A14,24 };
+uint8_t adrPins_322[21]={ 2,14,15,16,17,18,19,20,A13,A12,A11,A10,A9,A8,A15,A7,A6,21,24,A14,A5 }; //27c166 use this array without last element A5(BYTE pin)
+uint8_t *adrPins;
 
-char dataPins_801[8]={ 2,3,4,A0,A1,A2,A3,A5 };
-char dataPins_322[16]={ 4,39,41,44,52,48,A0,A2,38,40,43,45,50,A4,A1,A3 };
-char *dataPins;
-
-byte inByte=0;
-unsigned int secH=0,secL=0;
+uint8_t dataPins_801[8]={ 2,3,4,A0,A1,A2,A3,A5 };
+uint8_t dataPins_322[16]={ 4,39,41,44,52,48,A0,A2,38,40,43,45,50,A4,A1,A3 };
+uint8_t *dataPins;
 
 void setup() 
 {
-  Serial.begin(115200);
   pinMode(programPin,OUTPUT);
   pinMode(readPin,OUTPUT);
+  digitalWrite(programPin,LOW);
+  digitalWrite(readPin,LOW);
+  Serial.begin(115200);
   
 }
 
@@ -32,28 +35,33 @@ void setupMode(byte mode)
 {  
   switch(mode)
   {
-    case 0x30:
+    case '0':
        adrPins = adrPins_801;
        dataPins = dataPins_801;
        wordSize = 1;
        addrSize = 20;
        enablePin = eP_801;
+       imp = 60;
+       programPin = 6;
        break; 
-    case 0x31:
+    case '1':
        adrPins = adrPins_322;
        dataPins = dataPins_322;
        wordSize = 2;
        addrSize = 20;
        enablePin = eP_322;
-       pinMode(BYTEPin,OUTPUT);
-       digitalWrite(BYTEPin,HIGH);
+       imp = 60;
+       programPin = 47;
+       pinMode(Gpin,OUTPUT);
        break;
-    case 0x32:
+    case '2':
        adrPins = adrPins_322;
        dataPins = dataPins_322;
        wordSize = 2;
        addrSize = 21;
        enablePin = eP_322;
+       imp = 60;
+       programPin = 6;
        break;
   }
   for(int i = 0;i < addrSize; ++i)
@@ -61,24 +69,40 @@ void setupMode(byte mode)
     pinMode(*(adrPins + i),OUTPUT);
   }
   pinMode(enablePin,OUTPUT);
+  digitalWrite(enablePin,HIGH);
 }
-int index=0;
+
 void loop() 
 {
-  if(Serial.available()>36)
+  if(Serial.available()>1)
   {
-    setupMode(Serial.read());
+    memoryType = Serial.read();
+    setupMode(memoryType);
     inByte=Serial.read();
     switch(inByte)
     {
       case 'w':
-        programMode();
-        secH=Serial.read();
-        secL=Serial.read();
-        writeSector(secH,secL);
+        while(Serial.available()<3);
+        if(memoryType == 0x31 && Gpin_state == LOW)
+        {
+          digitalWrite(readPin,LOW);
+          delayMicroseconds(2);
+          digitalWrite(Gpin,HIGH);
+          delayMicroseconds(4);
+        }
+        sec_0=Serial.read();
+        sec_1=Serial.read();
+        sec_2=Serial.read();
+        writeSector((uint32_t)sec_0<<16|sec_1<<8|sec_2);
         break;
       case 'r':
-        readMode();
+        if(memoryType == 0x31&& Gpin_state == HIGH)
+        {
+          digitalWrite(Gpin,LOW);
+          delayMicroseconds(2);
+          digitalWrite(readPin,HIGH);
+          delayMicroseconds(4);
+        }
         readROM();
         break;
     }
@@ -93,8 +117,15 @@ void programMode()
   {
     pinMode(*(dataPins + i),OUTPUT);
   }
-  digitalWrite(readPin,LOW);
-  digitalWrite(programPin,HIGH);
+  if(memoryType == 0x31)
+  {
+    digitalWrite(programPin,HIGH);
+  }
+  else
+  {
+    digitalWrite(readPin,LOW);
+    digitalWrite(programPin,HIGH);
+  }
 }
 void readMode()
 {
@@ -103,8 +134,15 @@ void readMode()
   {
     pinMode(*(dataPins + i),INPUT);
   }
-  digitalWrite(programPin,LOW);
-  digitalWrite(readPin,LOW);
+  if(memoryType == 0x31)
+  {
+    digitalWrite(programPin,LOW);
+  }
+  else
+  {
+    digitalWrite(programPin,LOW);
+    digitalWrite(readPin,LOW);
+  }
 
 }
 void setAddress(uint32_t Addr)
@@ -140,50 +178,74 @@ void programByte(short Data)
   setData(Data);
   delayMicroseconds(4);
   digitalWrite(enablePin,LOW);
-  delayMicroseconds(60);
+  delayMicroseconds(imp);
   digitalWrite(enablePin,HIGH);
 }
 
-void writeSector(unsigned char sectorH,unsigned char sectorL)
+void writeSector(uint32_t address)
 {
-  byte dataBuffer[32];
-  unsigned long address=0;
-  byte CHK=sectorH,CHKreceived;
-  CHK^=sectorL;
-
-  address=sectorH;
-  address=(address<<8)|sectorL;
-  address*=32;
-  for(int i=0;i<32;i++)
+  uint16_t byteCount = 0;
+  address = (uint32_t)sec_0<<16|sec_1<<8|sec_2;
+  uint8_t dataBuffer[1024], smallBuf[32];
+  uint8_t CHK = 0;
+  while(byteCount!=1024)
   {
-        dataBuffer[i]=Serial.read();
-        CHK ^= dataBuffer[i];
-  }
-  CHKreceived = Serial.read();
-  programMode();
-  //only program the bytes if the checksum is equal to the one received
-  if(CHKreceived==CHK){
-    for (int i = 0; i < 32; ++i)
+    if(byteCount == 0)
     {
-      setAddress(address++);
-      if(wordSize == 1) programByte(dataBuffer[i]);
-      else if(wordSize == 2) { programByte(dataBuffer[i+1]<<8|dataBuffer[i]); ++i;}
+      CHK = sec_0^sec_1^sec_2;
     }
-  Serial.write(CHK);
+    while(Serial.available()<33);
+    uint8_t CHKreceived;
+    for(uint8_t i=0;i<32;++i)
+    {
+        smallBuf[i]=Serial.read();
+        CHK ^= smallBuf[i];
+    }
+    CHKreceived = Serial.read();
+    Serial.write(CHK);
+    if(CHKreceived==CHK) 
+    {
+      for(int i=0;i<32;i++)
+      {
+        dataBuffer[byteCount + i]=smallBuf[i];
+      }
+      byteCount+=32;
+      CHK = 0;
+    }
+    if(byteCount==1024)
+    {
+      programMode();
+      for (uint8_t i = 0; i < 1024; ++i)
+      {
+        setAddress(address++);
+        if(wordSize == 1) programByte(dataBuffer[i]);
+        else if(wordSize == 2) { programByte(dataBuffer[i+1]<<8|dataBuffer[i]); ++i;}
+      }
+    }  
   }
   readMode();
-
+  Serial.write(0xFF);
 }
 int readROM()
 {
-  unsigned long num=pow(2,addrSize);
-  unsigned long address;
+  uint32_t romSize=pow(2,addrSize);
+  uint32_t address;
   readMode();
-  digitalWrite(readPin,LOW);
   digitalWrite(programPin,LOW);
-  for(long address = 0; address < num; ++address)
+  if(memoryType != 0x31)
   {
-    Serial.write(readData(address++));
+    digitalWrite(readPin,LOW);
+  }
+  else
+  {
+    digitalWrite(readPin,HIGH);
+  }
+  
+  for(long address = 0; address < 512; ++address)
+  {
+    short data = readData(address++);
+    Serial.write( data & 0xFF);
+    if(wordSize==2) Serial.write((data>>8) & 0xFF);
   }
   digitalWrite(readPin,HIGH);
 }
