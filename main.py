@@ -10,16 +10,16 @@ Rom = None
 
 class Programmer():
 
-    def __init__(self, portName, memoryType):
+    def __init__(self, portName, memoryType, wordSize = None):
         self.port = portName
         self.type = str(memoryType)
+        self.wordSize = wordSize
 
     def write(self, progress ):
         global Rom        
         wRom = Rom
         progress.setValue(0)
-        ser = serial.Serial(self.port, 115200, timeout=4.0, rtscts=True, xonxoff=False)
-        ser.setDTR(False)
+        ser = serial.Serial(self.port, 115200, timeout=None)
         time.sleep(1)
         romsize = len( wRom )
         numsectors=int( romsize / 1024 )
@@ -27,7 +27,7 @@ class Programmer():
         for i in range(numsectors):
             ser.write(bytes(self.type,"ASCII"))
             ser.write(bytes("w","ASCII"))
-            address = i*1024
+            address = i*1024/self.wordSize
             data = bytearray(wRom[i*1024:(i+1)*1024])
             CHK = ((address>>16)&0xFF)^((address>>8)&0xFF)^(address&0xFF)
             ser.write(bytearray([(address>>16)&0xFF,(address>>8)&0xFF,address&0xFF]))
@@ -36,17 +36,14 @@ class Programmer():
                     CHK=CHK^data[k*int(1024/32)+j]
                 response=~CHK
                 while response!=CHK:
-                    time.sleep(0.01)
                     ser.write(data[k*int(1024/32):(k+1)*int(1024/32)])
                     ser.write(struct.pack(">B",CHK&0xFF))     
                     response=ord(ser.read(1))
-                    print(response)
                     if response!=CHK:
                         print("wrong checksum, sending chunk again\n")
-                CHK = 0
-            progress.setValue(i + 1)
-            ser.read(1)
-            time.sleep(0.01)
+                CHK = 0          
+            if ser.readline():
+                progress.setValue(i + 1)
         ser.close()
     def read(self, romSize, progress):
         rRom = bytearray()
@@ -135,13 +132,13 @@ class Aplication():
     def burn(self):
         global Rom  
         mWid = self.mainWidget 
-        memoryType = mWid.cBMemory.currentIndex() 
+        memoryType = mWid.cBMemory.currentIndex()
+        wordSize = 1
+        if(memoryType == 1 || memoryType == 2):
+            wordSize = 2
         if(memoryType != -1):          
-            programmer = Programmer(mWid.aPorts.currentText(), memoryType)
+            programmer = Programmer(mWid.aPorts.currentText(), memoryType, wordSize)
             Rom = RomConverter().convertRom(mWid.cBMemory.currentText())
-            with open('2.sfc','wb') as fl: 
-                fl.write(bytearray(Rom))
-                fl.close()
             programmer.write(mWid.progressBar)
         
     def dump(self):

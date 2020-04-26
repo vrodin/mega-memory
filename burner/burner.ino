@@ -215,16 +215,17 @@ void writeSector(uint32_t address)
     if(byteCount==1024)
     {
       programMode();
-      for (uint8_t i = 0; i < 1024; ++i)
+      for (uint16_t i = 0; i < 1024; ++i)
       {
         setAddress(address++);
         if(wordSize == 1) programByte(dataBuffer[i]);
         else if(wordSize == 2) { programByte(dataBuffer[i+1]<<8|dataBuffer[i]); ++i;}
       }
+      break;
     }  
   }
   readMode();
-  Serial.write(0xFF);
+  Serial.println("DONE!");
 }
 int readROM()
 {
